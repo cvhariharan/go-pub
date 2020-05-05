@@ -1,9 +1,6 @@
 package main
 
 import (
-	"crypto/rand"
-	"crypto/rsa"
-	"encoding/gob"
 	"encoding/json"
 	"io/ioutil"
 	"log"
@@ -17,45 +14,8 @@ import (
 var actorObj *Actor
 var finger *WebFingerResp
 
-type Actor struct {
-	Context           []string  `json:"@context"`
-	ID                string    `json:"id"`
-	Type              string    `json:"type"`
-	PreferredUsername string    `json:"preferredUsername"`
-	Inbox             string    `json:"inbox"`
-	Followers         string    `json:"followers"`
-	PubKey            PublicKey `json:"PublicKey"`
-}
-
-type PublicKey struct {
-	ID        string `json:"id"`
-	Owner     string `json:"owner"`
-	PubKeyPem string `json:"publicKeyPem"`
-}
-
-type WebFingerResp struct {
-	Subject string `json:"subject"`
-	Links   []Link `json:"links"`
-}
-
-type Link struct {
-	Rel  string `json:"rel"`
-	Type string `json:"type"`
-	Href string `json:"href"`
-}
-
 // TODO - Create RSA keys and store them
 func createActor(c echo.Context) error {
-	reader := rand.Reader
-	bitSize := 2048
-
-	key, err := rsa.GenerateKey(reader, bitSize)
-	if err != nil {
-		log.Println(err)
-		return err
-	}
-	encoder := gob.NewEncoder(outFile)
-	err = encoder.Encode(key.)
 
 	if actorObj == nil {
 		// Create actor
