@@ -1,10 +1,18 @@
 package main
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha1"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
+	"time"
 
 	"github.com/go-resty/resty/v2"
 	"github.com/labstack/echo/v4"
@@ -14,8 +22,43 @@ import (
 var actorObj *Actor
 var finger *WebFingerResp
 
-// TODO - Create RSA keys and store them
+// createKeys returns (publickey, privatekey)
+func createKeys() (rsa.PublicKey, *rsa.PrivateKey) {
+	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		panic(err)
+	}
+
+	pubKey := privKey.PublicKey
+
+	return pubKey, privKey
+}
+
+func stringifyPrivateKey(privKey *rsa.PrivateKey) string {
+	// Encode to string
+	privatePemData := pem.EncodeToMemory(
+		&pem.Block{
+			Type:  "RSA PRIVATE KEY",
+			Bytes: x509.MarshalPKCS1PrivateKey(privKey),
+		},
+	)
+
+	return string(privatePemData)
+}
+
+func jsonEscapePublicKey(pubKey rsa.PublicKey) string {
+	// Encode to string
+	publicPemData := pem.EncodeToMemory(
+		&pem.Block{
+			Type:  "RSA PUBLIC KEY",
+			Bytes: x509.MarshalPKCS1PublicKey(&pubKey),
+		},
+	)
+	return string(publicPemData)
+}
+
 func createActor(c echo.Context) error {
+	publicKey, privateKey := createKeys()
 
 	if actorObj == nil {
 		// Create actor
@@ -32,8 +75,9 @@ func createActor(c echo.Context) error {
 			PubKey: PublicKey{
 				ID:        "https://" + c.Request().Host + "/u/test#main-key",
 				Owner:     "https://" + c.Request().Host + "/u/test",
-				PubKeyPem: "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuzQc0MZF/+hjCJlNKPhi\nlVte7aC52w1lSxD7joLYq8Iz5YL3KVnbFPKnPZzMQiTOd7IN1wvxmPvKgRNUwgJJ\ncO4vEEVJt+Tayut1JVdmVTVTD2izIQYl12BuwnPBvgJx4Mhx7h9TMy+5X0wKm/aj\naQjE/Hn7t3v5/PFxvRNol7xknB4KQIY2BnFQIsqsmwDNgDpcV+0hps4J95jNyldm\nQlUbPC6JKocomMAMf2EoPvtQVeiQaoy82JnkrMkYjOxI0CiAgakvheX2octEjbf2\nIpUIfNRZvoJF646q72Z/C1pJ5GZoLqVACIpoV/fWEt5z6ICOisy7EOmt6NAh8WHl\nhwIDAQAB\n-----END PUBLIC KEY-----\n",
+				PubKeyPem: jsonEscapePublicKey(publicKey),
 			},
+			PrivateKey: privateKey,
 		}
 
 		// Create webfinger
@@ -68,6 +112,24 @@ func webfinger(c echo.Context) error {
 }
 
 // TODO - Add func to sign and send messages to an inbox address
+func sendMessage(c echo.Context, actorObj *Actor, message map[string]interface{}, inbox, fromDomain string) error {
+	u, err := url.Parse(inbox)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	toDomain := u.Host
+	log.Println("Sending to domain: ", toDomain)
+
+	t := time.Now().UTC().String()
+	log.Println("Time: ", t)
+	toSign := "(request-target): post " + u.Path + "\nhost: " + toDomain + "\ndate: " + t
+	hasher := sha1.New()
+	hasher.Write([]byte(toSign))
+	sha := base64.URLEncoding.EncodeToString(hasher.Sum(nil))
+	log.Println(sha)
+	return nil
+}
 
 // TODO - Add func to accept a follow request
 
@@ -122,6 +184,7 @@ func inbox(c echo.Context) error {
 }
 
 func main() {
+
 	e := echo.New()
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: []string{"*"},

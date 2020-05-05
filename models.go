@@ -1,13 +1,16 @@
 package main
 
+import "crypto/rsa"
+
 type Actor struct {
-	Context           []string  `json:"@context"`
-	ID                string    `json:"id"`
-	Type              string    `json:"type"`
-	PreferredUsername string    `json:"preferredUsername"`
-	Inbox             string    `json:"inbox"`
-	Followers         string    `json:"followers"`
-	PubKey            PublicKey `json:"PublicKey"`
+	Context           []string        `json:"@context"`
+	ID                string          `json:"id"`
+	Type              string          `json:"type"`
+	PreferredUsername string          `json:"preferredUsername"`
+	Inbox             string          `json:"inbox"`
+	Followers         string          `json:"followers"`
+	PubKey            PublicKey       `json:"PublicKey"`
+	PrivateKey        *rsa.PrivateKey `json:"-"`
 }
 
 type PublicKey struct {
