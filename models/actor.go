@@ -1,4 +1,4 @@
-package main
+package models
 
 import "crypto/rsa"
 
@@ -9,7 +9,7 @@ type Actor struct {
 	PreferredUsername string          `json:"preferredUsername"`
 	Inbox             string          `json:"inbox"`
 	Followers         string          `json:"followers"`
-	PubKey            PublicKey       `json:"PublicKey"`
+	PubKey            PublicKey       `json:"publicKey"`
 	PrivateKey        *rsa.PrivateKey `json:"-"`
 }
 

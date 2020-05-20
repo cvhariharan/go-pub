@@ -1,26 +1,30 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha1"
+	"crypto/sha256"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
+	"github.com/beevik/guid"
+	"github.com/cvhariharan/ActivityPub/models"
 	"github.com/go-resty/resty/v2"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	"github.com/spacemonkeygo/httpsig"
 )
 
-var actorObj *Actor
-var finger *WebFingerResp
+var actorObj *models.Actor
+var finger *models.WebFingerResp
 
 // createKeys returns (publickey, privatekey)
 func createKeys() (rsa.PublicKey, *rsa.PrivateKey) {
@@ -59,10 +63,10 @@ func jsonEscapePublicKey(pubKey rsa.PublicKey) string {
 
 func createActor(c echo.Context) error {
 	publicKey, privateKey := createKeys()
-
+	log.Println("Private Key: ", stringifyPrivateKey(privateKey))
 	if actorObj == nil {
 		// Create actor
-		actorObj = &Actor{
+		actorObj = &models.Actor{
 			Context: []string{
 				"https://www.w3.org/ns/activitystreams",
 				"https://w3id.org/security/v1",
@@ -72,7 +76,7 @@ func createActor(c echo.Context) error {
 			PreferredUsername: "test",
 			Inbox:             "https://" + c.Request().Host + "/test/inbox",
 			Followers:         "https://" + c.Request().Host + "/test/followers",
-			PubKey: PublicKey{
+			PubKey: models.PublicKey{
 				ID:        "https://" + c.Request().Host + "/u/test#main-key",
 				Owner:     "https://" + c.Request().Host + "/u/test",
 				PubKeyPem: jsonEscapePublicKey(publicKey),
@@ -81,10 +85,10 @@ func createActor(c echo.Context) error {
 		}
 
 		// Create webfinger
-		finger = &WebFingerResp{
+		finger = &models.WebFingerResp{
 			Subject: "acct:test@" + c.Request().Host,
-			Links: []Link{
-				Link{
+			Links: []models.Link{
+				models.Link{
 					Rel:  "self",
 					Type: "application/activity+json",
 					Href: "https://" + c.Request().Host + "/u/test",
@@ -112,7 +116,7 @@ func webfinger(c echo.Context) error {
 }
 
 // TODO - Add func to sign and send messages to an inbox address
-func sendMessage(c echo.Context, actorObj *Actor, message map[string]interface{}, inbox, fromDomain string) error {
+func sendMessage(c echo.Context, actorObj models.Actor, message map[string]interface{}, inbox, fromDomain string) error {
 	u, err := url.Parse(inbox)
 	if err != nil {
 		log.Println(err)
@@ -121,14 +125,67 @@ func sendMessage(c echo.Context, actorObj *Actor, message map[string]interface{}
 	toDomain := u.Host
 	log.Println("Sending to domain: ", toDomain)
 
-	t := time.Now().UTC().String()
+	t := time.Now().UTC().Format(time.RFC1123)
+	t = strings.Replace(t, "UTC", "GMT", -1)
 	log.Println("Time: ", t)
-	toSign := "(request-target): post " + u.Path + "\nhost: " + toDomain + "\ndate: " + t
-	hasher := sha1.New()
-	hasher.Write([]byte(toSign))
-	sha := base64.URLEncoding.EncodeToString(hasher.Sum(nil))
-	log.Println(sha)
+	toSign := "(request-target): post " + u.Path + "\nhost: " + fromDomain + "\ndate: " + t
+	signer := httpsig.NewSigner(actorObj.PubKey.ID, actorObj.PrivateKey, httpsig.RSASHA256, []string{"(request-target)", "host", "date"})
+	log.Println("TO SIGN: ", toSign)
+	h := sha256.New()
+	h.Write([]byte(toSign))
+	log.Println("SHA256 hash: ", string(h.Sum(nil)))
+
+	requestBody, err := json.Marshal(message)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	r, err := http.NewRequest("POST", inbox, bytes.NewBuffer(requestBody))
+	if err != nil {
+		log.Println(err)
+	}
+
+	r.Header.Add("Content-Type", "application/activity+json")
+	err = signer.Sign(r)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	sigHeader := r.Header.Get("Authorization")
+	sigHeader = strings.ReplaceAll(sigHeader, "Signature", "")
+	sigHeader = strings.TrimLeft(sigHeader, " ")
+	log.Println("Signature NEW: ", sigHeader)
+	r.Header.Set("Signature", sigHeader)
+	r.Header.Del("Authorization")
+
+	response, err := http.DefaultClient.Do(r)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	log.Println(r.Header)
+	resp, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+	log.Println("Send message response status: ", response.StatusCode)
+	log.Println("Send message response message: ", string(resp))
 	return nil
+}
+
+func sendAccept(c echo.Context, actorObj models.Actor, object interface{}, inbox, fromDomain string) error {
+	id := guid.NewString()
+	urlId := "https://" + fromDomain + "/" + id
+	message := make(map[string]interface{})
+
+	message["@context"] = "https://www.w3.org/ns/activitystreams"
+	message["id"] = urlId
+	message["type"] = "Accept"
+	message["actor"] = actorObj.ID
+	message["object"] = object
+
+	return sendMessage(c, actorObj, message, inbox, fromDomain)
 }
 
 // TODO - Add func to accept a follow request
@@ -149,13 +206,8 @@ func inbox(c echo.Context) error {
 	// Handle follow requests, this does not work without the signature
 	if req["type"] != nil {
 		if req["type"].(string) == "Follow" {
-			followee := req["actor"].(string)
-			req["actor"] = "https://" + c.Request().Host + "/u/test"
-			req["id"] = "https://" + c.Request().Host + "/u/test"
-			req["type"] = "Accept"
-			req["object"] = followee
 			r := resty.New()
-			actorResp, err := r.R().Get(followee + ".json")
+			actorResp, err := r.R().Get(req["actor"].(string) + ".json")
 			if err != nil {
 				log.Println(err)
 				return err
@@ -170,13 +222,11 @@ func inbox(c echo.Context) error {
 			}
 
 			inboxUrl := actorMap["inbox"].(string)
-			inboxResp, err := r.R().SetBody(req).Post(inboxUrl)
+			err = sendAccept(c, *actorObj, req["actor"], inboxUrl, c.Request().Host)
 			if err != nil {
 				log.Println(err)
 				return err
 			}
-			log.Println("Inbox resp: ", inboxResp.Status())
-			log.Println(req)
 		}
 	}
 	// log.Println(req)
