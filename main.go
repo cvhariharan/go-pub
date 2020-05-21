@@ -188,6 +188,32 @@ func sendAccept(c echo.Context, actorObj models.Actor, object interface{}, inbox
 	return sendMessage(c, actorObj, message, inbox, fromDomain)
 }
 
+func sendNote(c echo.Context, actorObj models.Actor, note string, inbox, fromDomain string) error {
+	messageId := guid.NewString()
+	createId := guid.NewString()
+	createUrl := "https://" + fromDomain + "/" + createId
+	messageUrl := "https://" + fromDomain + "/" + messageId
+
+	message := make(map[string]interface{})
+	object := make(map[string]interface{})
+
+	object["id"] = messageUrl
+	object["type"] = "Note"
+	object["published"] = time.Now().UTC().Format(time.RFC1123)
+	object["attributedTo"] = actorObj.ID
+	object["content"] = note
+	object["to"] = []string{inbox}
+
+	message["@context"] = "https://www.w3.org/ns/activitystreams"
+	message["id"] = createUrl
+	message["type"] = "Create"
+	message["actor"] = actorObj.ID
+	message["to"] = []string{inbox}
+	message["object"] = object
+
+	return sendMessage(c, actorObj, message, inbox, fromDomain)
+}
+
 // TODO - Add func to accept a follow request
 
 func inbox(c echo.Context) error {
@@ -223,6 +249,13 @@ func inbox(c echo.Context) error {
 
 			inboxUrl := actorMap["inbox"].(string)
 			err = sendAccept(c, *actorObj, req["actor"], inboxUrl, c.Request().Host)
+			if err != nil {
+				log.Println(err)
+				return err
+			}
+
+			// Send a test note to the followee
+			err = sendNote(c, *actorObj, "This is a test message", inboxUrl, c.Request().Host)
 			if err != nil {
 				log.Println(err)
 				return err
